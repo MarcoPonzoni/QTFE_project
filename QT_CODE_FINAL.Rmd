@@ -1,0 +1,630 @@
+---
+title: "QT ASSIGNMENT"
+output: html_document
+date: "2023-09-27"
+---
+
+# DATA IMPORTING AND MANIPULATION
+
+```{r message=FALSE, warning=FALSE}
+rm(list = ls())
+setwd("/Users/marcoponzoni/Desktop/PASSED EXAMS/MAASTRICHT/QUANTITATIVE TECHNIQUES FOR FINANCIAL ECONOMICS/CONSEGNA QT/TeamD_sourcefiles")
+load("assignment.RData")
+```
+
+```{r message=FALSE, warning=FALSE}
+library(lmtest)
+library(tidyverse)
+library(forecast)
+library(urca)
+library(TTR)
+library(vars)
+library(car)
+library(tseries)
+```
+
+```{r message=FALSE, warning=FALSE}
+setwd("/Users/marcoponzoni/Desktop/PASSED EXAMS/MAASTRICHT/QUANTITATIVE TECHNIQUES FOR FINANCIAL ECONOMICS/CONSEGNA QT/TeamD_sourcefiles")
+prices = read.csv("Data for oil prices from 1986.csv")
+view(prices)
+glimpse(prices)
+```
+
+```{r}
+#turn date into date format
+prices = prices %>%
+  mutate(DATE = as.Date(DATE)) %>% 
+  filter(DATE < "2020-02-01")
+glimpse(prices)
+
+#visualize our data
+prices %>% 
+  ggplot() + 
+  geom_line(aes(DATE, DCOILWTICO)) +
+  labs(title = "Crude oil prices - WTI index (Dollars per barrel)", subtitle = "January 1986 - January 2020",
+       y = "WTI index", x = "Date") +
+  theme_bw() +
+    theme(plot.title = element_text(color = "black", size = 15,
+        face = "bold"), plot.subtitle = element_text(color = "black")) 
+```
+
+```{r}
+#components
+library(TTR)
+prices.ts = ts(prices$DCOILWTICO, frequency = 12)
+prices_components = decompose(prices.ts)
+plot(prices_components)
+```
+
+```{r}
+#test for stationarity
+library(urca)
+test.pr = ur.df(prices$DCOILWTICO, type = "trend") #we accept null hypothesis, so series has unit root (non stationary)
+summary(test.pr)
+
+#ACF
+plot(acf(prices$DCOILWTICO)) #looking at acf, NON-STATIONARY
+```
+
+# ARMA
+
+## DIFFERENCING
+
+```{r}
+#need to take a difference
+WTI.diff = 100*diff(log(prices$DCOILWTICO))
+prices.diff = data.frame(date = prices$DATE[-1],
+                       WTI.diff)
+view(prices.diff)
+
+#visualize data after taking difference
+prices.diff %>% 
+  ggplot() + 
+  geom_line(aes(date, WTI.diff)) +
+  labs(title = "Crude oil price returns - WTI index (percentage change)", subtitle = "February 1986 - January 2020",
+        y = "Percentage change in WTI prices", x = "Date") +
+  theme_bw() +
+    theme(plot.title = element_text(color = "black", size = 15,
+        face = "bold"), plot.subtitle = element_text(color = "black")) 
+
+#test for stationarity
+library(urca)
+test.pr1 = ur.df(prices.diff$WTI.diff, type = "trend") #we reject null hypothesis, so series STATIONARY
+summary(test.pr1)
+
+#ACF - PACF
+plot(acf(prices.diff$WTI.diff)) 
+plot(pacf(prices.diff$WTI.diff)) #decay tells us that we need to use 1 lag for AR part --> ARMA(1,0,0)
+```
+
+## ARMA MODEL
+
+```{r}
+#ARMA MODEL
+library(forecast)
+
+#auto arima function
+auto = auto.arima(prices.diff$WTI.diff, 
+           d = 0,
+           max.p = 2,
+           max.q = 2,
+           stationary = T,
+           trace = T,
+           approximation = T) #best model is ARMA(1,0,0)
+summary(auto)
+```
+
+```{r}
+#ARMA(1,0,1)
+model.arma11 = Arima(prices.diff$WTI.diff, order = c(1,0,1))
+coeftest(model.arma11) #ar1 and ma1 NOT significant
+summary(model.arma11)
+
+#ARMA(2,0,2)
+model.arma22 = Arima(prices.diff$WTI.diff, order = c(2,0,2))
+coeftest(model.arma22) #ONLY ar1 and ma1 SIGNIFICANT
+summary(model.arma22)
+
+#ARMA(1,0,2)
+model.arma12 = Arima(prices.diff$WTI.diff, order = c(1,0,2))
+coeftest(model.arma12) #NO coefficient SIGNIFICANT
+summary(model.arma12)
+```
+
+```{r}
+#ARMA(2,0,1)
+model.arma21 = Arima(prices.diff$WTI.diff, order = c(2,0,1))
+coeftest(model.arma21) #ALL COEFFICIENTS SIGNIFICANT
+summary(model.arma21)
+
+#ARMA(1,0,0)
+model.ar1 = Arima(prices.diff$WTI.diff, order = c(1,0,0))
+coeftest(model.ar1) #ar1 significant
+summary(model.ar1)
+
+#table aic
+aic_table = data.frame("ARMA11" = model.arma11$aic,
+           "ARMA12" = model.arma12$aic,
+           "ARMA21" = model.arma21$aic,
+           "ARMA22" = model.arma22$aic,
+           "AR1" = model.ar1$aic) %>% 
+  pivot_longer(names_to = "model",
+               col = ARMA11:AR1,
+               values_to = "AIC")
+view(aic_table)
+
+bic_table = data.frame("ARMA11" = model.arma11$bic,
+           "ARMA12" = model.arma12$bic,
+           "ARMA21" = model.arma21$bic,
+           "ARMA22" = model.arma22$bic,
+           "AR1" = model.ar1$bic) %>% 
+  pivot_longer(names_to = "model",
+               col = ARMA11:AR1,
+               values_to = "BIC")
+view(bic_table)
+
+(best.arma.aic = aic_table[which.min(aic_table$AIC),]) #according to AIC, best model is ARMA(2,0,1)
+(best.arma.bic = bic_table[which.min(bic_table$BIC),]) #according to BIC, best model is AR(1)
+```
+
+```{r}
+#we test for autocorrelation in residuals ARMA(1,0,0)
+#LJUNG-BOX TEST
+checkresiduals(model.ar1) #p-value is higher than 0.05, so we accept null hypothesis (NO AUTOCORR.)
+#AUTOCORRELATION IN RESIDUALS FROM THE TIME SERIES PLOT --> NO AUTOCORRELATION
+#only one lag outside threshold 
+
+#we test for autocorrelation in residuals ARMA(2,0,1)
+#LJUNG-BOX TEST
+checkresiduals(model.arma21) #p-value is higher than 0.05, so we accept null hypothesis (NO AUTOCORR./INDEPENDENCE)
+#AUTOCORRELATION IN RESIDUALS FROM THE TIME SERIES PLOT? --> NO AUTOCORRELATION
+#all lags in ACF inside threshold
+```
+
+## FORECASTING ARMA
+
+We compare ARMA(1,0,0) and ARMA(2,0,1).
+
+```{r}
+T = length(prices.diff$WTI.diff)
+f.vec = c(20, 50)
+MSFE.ARMA21.df = data.frame(F = f.vec,
+                            MSFE = rep(NA, length(f.vec)))
+
+MSFE.AR1.df = data.frame(F = f.vec,
+                            MSFE = rep(NA, length(f.vec)))
+
+for (i in 1:length(f.vec)){
+  
+  f.vec[i]
+  sample_est = prices.diff$WTI.diff[1:(T-f.vec[i])]
+  sample_for = prices.diff$WTI.diff[(T-f.vec[i]+1):T]
+
+  arma21.estim = Arima(sample_est, order = c(2,0,1))
+  arma21.forecast = forecast(arma21.estim, h = f.vec[i])
+  forecast:::plot.forecast(arma21.forecast,
+                         fcol = "blue",
+                         shadecols = "oldstyle"
+                         )#we compute residuals
+  MSFE.ARMA21.df$MSFE[i]= mean((sample_for - arma21.forecast$mean)^2)
+  
+  ar1.estim = Arima(sample_est, order = c(1,0,0))
+  ar1.forecast = forecast(ar1.estim, h = f.vec[i])
+  forecast:::plot.forecast(ar1.forecast,
+                         fcol = "blue",
+                         shadecols = "oldstyle"
+                         )#we compute residuals
+  MSFE.AR1.df$MSFE[i]= mean((sample_for - ar1.forecast$mean)^2)
+  
+}
+MSFE.ARMA21.df
+MSFE.AR1.df
+
+```
+
+## ROLLING WINDOW ARMA
+
+```{r}
+#TUNING
+#AR(1,0,0)
+
+#we tune step size and window size in order to choose best combination in terms of MSFE
+
+rw.ar1.tuning = function(x, F){
+  #define objects
+  rw.error = c()
+  step.seq = seq(1, 12, 1) #define order of tuning parameter (step size)
+  wind.seq = seq(100, 300, 10) #define order of tuning parameter (window size)
+  MSFE.df = expand.grid(step.seq, wind.seq) %>% 
+    rename(step = Var1, window = Var2) #create df to store errors
+  MSFE.df$MSFE = rep(NA, nrow(MSFE.df)) 
+  
+  for (k in 1:length(wind.seq)){
+    window = wind.seq[k]
+    
+    for (z in 1:length(step.seq)) {
+      step = step.seq[z]
+      
+       rw.error = numeric(length = length(seq(1, (length(x[, 2]) - window + 1), by = step)))
+      
+      #for loop for making window step forward
+      for (i in 1:(length(
+        seq(1, (length(x[, 2]) - window + 1), by = step)))
+      ) {
+        
+        data = x[,2][i:(i + window - 1)]
+        train = data[1:(window - F)]
+        forecast = data[(window - F + 1):window]
+        ar1 = Arima(train, order = c(1,0,0))
+        arma.forecast = forecast(ar1, h = F)
+        resid = forecast - arma.forecast$mean
+        rw.error[i] = mean(resid^2) #error from each window
+      }
+      
+      MSFE = mean(rw.error) #error coming from each step size and window size
+      MSFE.df[MSFE.df$step == step & MSFE.df$window == window, "MSFE"] = MSFE #saving error into a data frame with step size as rows
+    }
+  }    
+  
+  #function results
+  window.best = MSFE.df$window[which.min(MSFE.df$MSFE)]
+  step.best = MSFE.df$step[which.min(MSFE.df$MSFE)]
+  results = list(best_error = min(MSFE.df$MSFE), best_window = window.best, best_step = step.best, df = MSFE.df)
+  return(results)
+}
+
+(rw.ar1.50 = rw.ar1.tuning(prices.diff, 50)) #BEST COMBO IS WINDOW SIZE 110 AND STEP SIZE 12
+(rw.ar1.20 = rw.ar1.tuning(prices.diff, 20))
+MSFE.ar1.rw.df = data.frame(MSFE = c(rw.ar1.50$best_error,
+                                        rw.ar1.20$best_error),
+                               H = c(50,20))
+```
+
+```{r}
+#TUNING
+#ARMA(2,0,1)
+
+#we tune step size and window size in order to choose best combination in terms of MSFE
+
+rw.arma21.tuning = function(x, F){
+  #define objects
+  rw.error = c()
+  step.seq = seq(1, 12, 1) #define order of tuning parameter (step size)
+  wind.seq = seq(100, 300, 10) #define order of tuning parameter (window size)
+  MSFE.df = expand.grid(step.seq, wind.seq) %>% 
+    rename(step = Var1, window = Var2) #create df to store errors
+  MSFE.df$MSFE = rep(NA, nrow(MSFE.df)) 
+  
+  for (k in 1:length(wind.seq)){
+    window = wind.seq[k]
+    
+    for (z in 1:length(step.seq)) {
+      step = step.seq[z]
+      
+       rw.error = numeric(length = length(seq(1, (length(x[, 2]) - window + 1), by = step)))
+      
+      #for loop for making window step forward
+      for (i in 1:(length(
+        seq(1, (length(x[, 2]) - window + 1), by = step)))
+      ) {
+        
+        data = x[,2][i:(i + window - 1)]
+        train = data[1:(window - F)]
+        forecast = data[(window - F + 1):window]
+        tryCatch({arma21 = Arima(train, order = c(2,0,1))
+        arma.forecast = forecast(arma21, h = F)
+        resid = forecast - arma.forecast$mean
+        rw.error[i] = mean(resid^2) #error from each window
+        }, error = function(e){
+        rw.error[i] = NA
+        })
+      }
+       
+      MSFE = mean(rw.error) #error coming from window size
+      MSFE.df[MSFE.df$step == step & MSFE.df$window == window, "MSFE"] = MSFE  #saving error into a data frame with step size as rows
+    }
+  }    
+  
+  #function results
+  window.best = MSFE.df$window[which.min(MSFE.df$MSFE)]
+  step.best = MSFE.df$step[which.min(MSFE.df$MSFE)]
+  results = list(best_error = min(MSFE.df$MSFE), best_window = window.best, best_step = step.best, df = MSFE.df)
+  return(results)
+}
+
+(rw.arma21.50 = rw.arma21.tuning(prices.diff, 50)) #BEST COMBO IS WINDOW SIZE 110 AND STEP SIZE 12
+(rw.arma21.20 = rw.arma21.tuning(prices.diff, 20))
+MSFE.arma21.rw.df = data.frame(MSFE = c(rw.arma21.50$best_error,
+                                        rw.arma21.20$best_error),
+                               H = c(50,20))
+```
+
+# VAR MODEL
+
+We try to choose two variables in order to see if our forecasting performance can improve:
+
+## SUPPLY
+
+```{r, results='hide'}
+setwd("/Users/marcoponzoni/Desktop/CONSEGNA QT/TeamD_sourcefiles")
+supply = read.csv("supply.csv")
+glimpse(supply)
+supply = supply %>% 
+  rename(DATE = Month,
+         Barrels = U.S..Product.Supplied.of.Crude.Oil.and.Petroleum.Products.Thousand.Barrels) %>% 
+  mutate(DATE =  as.Date(DATE)) %>% 
+  arrange(DATE) %>% 
+  filter(DATE < "2020-02-01")
+view(supply)
+
+#visualize supply data
+supply %>% 
+  ggplot() + 
+  geom_line(aes(DATE, Barrels)) +
+  labs(title = "Crude Oil and Petrolium Products Supply (thousands barrels)", subtitle = "January 1986 - January 2020. NOT SEASONALLY ADJUSTED",
+       y = "Thousand barrels", x = "Date") +
+  theme_bw() +
+    theme(plot.title = element_text(color = "black", size = 15,
+        face = "bold"), plot.subtitle = element_text(color = "black")) 
+
+#supply components
+supply.ts = ts(supply$Barrels, frequency = 12)
+supply_components = decompose(supply.ts) #seasonality component
+plot(supply_components)
+
+#adjusting for seasonality
+supply_adj = supply.ts - supply_components$seasonal
+
+supply_adj = data.frame(date = supply$DATE,
+                             barrels_adj = supply_adj)
+
+#test for stationarity
+test.supply.adj = ur.df(supply_adj$barrels_adj, type = "trend")
+summary(test.supply.adj) #non-stationary
+
+#differencing
+barrels.diff = 100*diff(log(supply_adj$barrels_adj), differences = 1)
+supply.diff = data.frame(date = supply_adj$date[-1],
+                       barrels.diff.adj = barrels.diff)
+view(supply.diff)
+
+supply.diff %>% 
+  ggplot() + 
+  geom_line(aes(date, barrels.diff.adj)) +
+  labs(title = "Percentage change in Crude Oil and Petroleum Products Supply", subtitle = "February 1986 - January 2020",
+       y = "Percentage change", x = "Date") +
+  theme_bw() +
+    theme(plot.title = element_text(color = "black", size = 15,
+        face = "bold"), plot.subtitle = element_text(color = "black")) 
+
+test.supply.adj1 = ur.df(supply.diff$barrels.diff.adj, type = "trend") #we reject null hypothesis, so series STATIONARY
+summary(test.supply.adj1)
+```
+
+## INFLATION
+
+```{r}
+setwd("/Users/marcoponzoni/Desktop/CONSEGNA QT/TeamD_sourcefiles")
+cpi = read.csv("CPI.csv")
+glimpse(cpi)
+cpi = cpi %>% 
+  rename(cpi = CPIAUCSL) %>% 
+  mutate(DATE = as.Date(DATE))
+
+cpi %>% 
+  ggplot() + 
+  geom_line(aes(DATE, cpi)) +
+  labs(title = "CPI for All Urban Consumers (seasonally adjusted)", subtitle = "February 1986 - January 2020",
+        y = "CPI", x = "Date") +
+  theme_bw() +
+    theme(plot.title = element_text(color = "black", size = 15,
+        face = "bold"), plot.subtitle = element_text(color = "black")) 
+
+view(cpi)
+
+#we want to use inflation as variable, so we compute it as percentage change in CPI
+infl = (diff(cpi$cpi)/cpi$cpi[1:(length(cpi$cpi)-1)])*100
+inflation = data.frame(date = cpi$DATE[-1],
+                       inflation = infl)
+view(inflation)
+
+#visualize inflation data
+plot(inflation, type = "l")
+inflation %>% 
+  ggplot() + 
+  geom_line(aes(date, inflation)) +
+  labs(title = "Inflation rate as percentage change in CPI for All Urban Consumers", subtitle = "February 1986 - January 2020",
+        y = "Inflation rate", x = "Date") +
+  theme_bw() +
+    theme(plot.title = element_text(color = "black", size = 15,
+        face = "bold"), plot.subtitle = element_text(color = "black")) 
+
+#test for stationarity - cpi
+library(urca)
+test.infl = ur.df(inflation$inflation, type = "trend") #we reject null hypothesis, so series has NO unit root
+summary(test.infl)
+
+inflation = inflation %>% 
+  filter(date > "1986-01-01")
+view(inflation)
+
+#ACF-PACF
+plot(acf(inflation$inflation))
+```
+
+```{r eval=FALSE, include=FALSE, results='hide'}
+#visualize data
+data.frame(date = prices.diff$date,
+           barrels.diff = supply.diff$barrels.diff.adj,
+           prices.diff = prices.diff$WTI.diff) %>% 
+  ggplot()+
+  geom_line(aes(date, prices.diff, col = "prices.diff")) +
+  geom_line(aes(date, barrels.diff, col = "barrels.diff")) +
+  labs(x= "Year",
+       y = "WTI prices/barrels",
+       color = "Series")
+
+data.frame(date = prices.diff$date,
+           inflation = inflation$inflation,
+           prices.diff = prices.diff$WTI.diff) %>% 
+  ggplot()+
+  geom_line(aes(date, prices.diff, col = "prices.diff"))+
+  geom_line(aes(date, inflation, col = "inflation"))+
+  labs(x= "Year",
+       y = "WTI prices/PCI change",
+       color = "Series")
+```
+
+```{r eval=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+supply.seas = data.frame(date = supply$DATE,
+                       supply.seas = supply_components$seasonal)
+view(supply.seas)
+```
+
+## VAR MODEL
+
+```{r message=FALSE, warning=FALSE}
+library(vars)
+series = data.frame(returns = prices.diff$WTI.diff,
+                    supply = supply.diff$barrels,
+                    infl = inflation$inflation)
+
+view(series) 
+
+#VARselect returns INFORMATION CRITERIA
+var.ic = VARselect(series, lag.max = 50, type = "const")
+var.ic #2 lags according to BIC (but all information criteria tell the same)
+#Final Prediction Error (FPE), Akaike information criterion (AIC), Hannan Quinn Information Criteria (HQIC), Schwarz Information Criteria (SIC)/Bayesian Information Criteria (BIC)
+
+var2 = vars::VAR(series, 2, type = "const")
+summary(var2) #best VAR model looking at BIC as info criteria
+
+BIC(var2)
+
+#TEST RESIDUALS FOR AUTOCORRELATION
+serial.test(var2, lags.pt=10, type="PT.asymptotic") #residuals DO NOT PASS the test for serial correlation since p-value < 0.05, SO WE REJECT NULL
+
+#GRANGER TEST --> NULL hypothesis is that LAGS OF POTENTIAL CAUSAL VARIABLE DO NOT HELP PREDICT DEPENDENT VARIABLE
+grangertest(returns ~ supply, order = 2, data = series) #NOT SIGNIFICANT --> we accept null hypothesis because p-value higher (NO CAUSALITY)
+grangertest(returns ~ infl, order = 2, data = series) #NOT SIGNIFICANT (NO CAUSALITY)
+
+#IMPULSE RESPONSE
+ir.supply = irf(var2, impulse = "supply", response = "returns", n.ahead = 20, ortho = FALSE)
+plot(ir.supply) #an impulse in supply causes an effect in prices --> NO
+
+ir.infl = irf(var2, impulse = "infl", response = "returns", n.ahead = 20, ortho = FALSE)
+plot(ir.infl) #an impulse in infl. causes an effect in prices --> NO
+```
+
+## FORECASTING
+
+```{r}
+T = length(series$returns)
+f.vec = c(20,50)
+MSFE.VAR2.df = data.frame(F = f.vec,
+                            MSFE = rep(NA, length(f.vec)))
+
+for (i in 1:length(f.vec)){
+  
+  f.vec[i]
+  estim1 = data.frame(
+    returns_est = series$returns[1:(T-f.vec[i])],
+    supply_est = series$supply[1:(T-f.vec[i])],
+    infl_est = series$infl[1:(T-f.vec[i])])
+  forecast1 = data.frame(
+    returns_for = series$returns[(T-f.vec[i]+1):T],
+    supply_for = series$supply[(T-f.vec[i]+1):T],
+    infl_for = series$infl[(T-f.vec[i]+1):T])
+  
+  var.estim = VAR(ts(estim1), 2, type = "const")
+  var.forecast = forecast(var.estim, h = f.vec[i])
+  
+  plot = var.forecast %>% 
+  autoplot()
+  print(plot)
+  
+MSFE.VAR2.df$MSFE[i]= mean((forecast1$returns_for - var.forecast$forecast$returns_est$mean)^2)
+}
+
+MSFE.VAR2.df
+```
+
+## ROLLING WINDOW VAR
+
+```{r}
+#TUNING
+#VAR(2)
+
+#we tune step size and window size in order to choose best combination in terms of MSFE
+
+rw.var2.tuning = function(x, y, z, F){
+  
+  rw.error = c()
+  step.seq = seq(1, 12, 1) #define order of tuning parameter (step size)
+  wind.seq = seq(100, 300, 10) #define order of tuning parameter (window size)
+  MSFE.df = expand.grid(step.seq, wind.seq) %>% 
+    rename(step = Var1, window = Var2) #create df to store errors
+  MSFE.df$MSFE = rep(NA, nrow(MSFE.df)) 
+  
+  for (k in 1:length(wind.seq)){
+    window = wind.seq[k]
+      
+    for (w in 1:length(step.seq)) {
+      step = step.seq[w]
+      
+      rw.error = numeric(length = length(seq(1, (length(x[, 2]) - window + 1), by = step)))
+      
+      for (i in 1:(length(
+        seq(1, (length(x[, 2]) - window + 1), by = step)))
+      ) {
+        
+        data = data.frame(x = x[,2][i:(i + window - 1)],
+                          y = y[,2][i:(i + window - 1)],
+                          z = z[,2][i:(i + window - 1)]
+        )
+        
+        train = data.frame(x = data[,1][1:(window - F)],
+                           y = data[,2][1:(window - F)],
+                           z = data[,3][1:(window - F)]
+        )
+        
+        forecast = data.frame(x = data[,1][(window - F + 1):window],
+                            y = data[,2][(window - F + 1):window],
+                            z = data[,3][(window - F + 1):window]
+        )
+        
+        var2 = VAR(ts(train), 2, type = "const")
+        var.forecast = forecast(var2, h = F)
+        resid = forecast$x - var.forecast$forecast$x$mean
+        rw.error[i] = mean(resid^2)
+      }
+      
+      MSFE = mean(rw.error) #error coming from each step size and window size
+      MSFE.df[MSFE.df$step == step & MSFE.df$window == window, "MSFE"] = MSFE #saving error into a data frame with step size as rows
+    }
+  }
+  #function results
+  window.best = MSFE.df$window[which.min(MSFE.df$MSFE)]
+  step.best = MSFE.df$step[which.min(MSFE.df$MSFE)]
+  results = list(best_error = min(MSFE.df$MSFE), best_window = window.best, best_step = step.best, df = MSFE.df)
+  return(results)
+}
+
+(rw.var.50 = rw.var2.tuning(prices.diff, supply.diff, inflation, 50)) 
+(rw.var.20 = rw.var2.tuning(prices.diff, supply.diff, inflation, 20))
+MSFE.var2.rw.df = data.frame(MSFE = c(rw.var.50$best_error,
+                                        rw.var.20$best_error),
+                               H = c(50,20))
+```
+
+```{r}
+MSFE_table = data.frame(MODEL = c("AR1","ARMA21", "VAR2", "AR1.RW","ARMA21.RW", "VAR2.RW"),
+                        H20 = c(MSFE.AR1.df$MSFE[1], MSFE.ARMA21.df$MSFE[1], MSFE.VAR2.df$MSFE[1], MSFE.ar1.rw.df$MSFE[2], MSFE.arma21.rw.df$MSFE[2], MSFE.var2.rw.df$MSFE[2]),
+                        H50 = c(MSFE.AR1.df$MSFE[2], MSFE.ARMA21.df$MSFE[2], MSFE.VAR2.df$MSFE[2], MSFE.ar1.rw.df$MSFE[1], MSFE.arma21.rw.df$MSFE[1], MSFE.var2.rw.df$MSFE[1])
+)
+view(MSFE_table)
+```
+
+```{r}
+save.image("assignment.RData")
+```
